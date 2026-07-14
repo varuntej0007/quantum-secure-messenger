@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Quantum Secure Messenger</title>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+  :root {
+    --bg: #0a0e17;
+    --panel: #10182b;
+    --border: #23304d;
+    --cyan: #4fd8e8;
+    --purple: #a78bfa;
+    --green: #4ade80;
+    --red: #f87171;
+    --text: #dbe4ff;
+    --muted: #6b7ca0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: radial-gradient(circle at top, #101a30 0%, #060810 100%);
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+    padding: 24px;
+    min-height: 100vh;
+  }
+  header { text-align: center; margin-bottom: 24px; }
+  header h1 {
+    font-size: 22px;
+    letter-spacing: 2px;
+    background: linear-gradient(90deg, var(--cyan), var(--purple));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    margin: 0 0 6px 0;
+  }
+  header p { color: var(--muted); font-size: 13px; margin: 0; }
+
+  .pipeline {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    margin: 20px 0 28px 0;
+    flex-wrap: wrap;
+  }
+  .stage {
+    padding: 8px 14px;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    font-size: 11px;
+    color: var(--muted);
+    transition: all 0.3s;
+  }
+  .stage.active { border-color: var(--cyan); color: var(--cyan); box-shadow: 0 0 12px rgba(79,216,232,0.3); }
+  .stage.done { border-color: var(--green); color: var(--green); }
+
+  .controls { display: flex; justify-content: center; gap: 10px; margin-bottom: 24px; flex-wrap: wrap; }
+  button {
+    background: linear-gradient(135deg, #1c2942, #141d33);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  button:hover { border-color: var(--cyan); color: var(--cyan); }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
+  button.reset { border-color: var(--red); color: var(--red); }
+
+  .panels { display: flex; gap: 20px; max-width: 1100px; margin: 0 auto; flex-wrap: wrap; }
+  .panel {
+    flex: 1;
+    min-width: 320px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px;
+  }
+  .panel h2 {
+    font-size: 15px;
+    margin: 0 0 12px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .panel h2 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .panel.alice h2 .dot { background: var(--cyan); }
+  .panel.bob h2 .dot { background: var(--purple); }
+
+  .log {
+    background: #060a14;
+    border-radius: 8px;
+    padding: 12px;
+    height: 260px;
+    overflow-y: auto;
+    font-size: 11.5px;
+    line-height: 1.6;
+    border: 1px solid var(--border);
+  }
+  .log .entry { margin-bottom: 8px; word-break: break-all; }
+  .log .label { color: var(--muted); }
+  .log .val { color: var(--text); }
+  .log .ok { color: var(--green); }
+  .log .warn { color: #fbbf24; }
+  .log .err { color: var(--red); }
+
+  .msgbox { display: flex; gap: 8px; margin-top: 12px; }
+  .msgbox input {
+    flex: 1;
+    background: #060a14;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 9px 12px;
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 13px;
+  }
+
+  footer { text-align: center; margin-top: 24px; color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>QUANTUM SECURE MESSENGER</h1>
+  <p>CURBy quantum entropy &middot; ML-KEM-768 &middot; AES-256-GCM &mdash; running on Raspberry Pi 5</p>
+</header>
+
+<div class="pipeline" id="pipeline">
+  <div class="stage" data-stage="entropy">1. Quantum Entropy</div>
+  <div class="stage" data-stage="kem">2. ML-KEM-768 Exchange</div>
+  <div class="stage" data-stage="derive">3. Session Key (HKDF)</div>
+  <div class="stage" data-stage="encrypt">4. AES-256-GCM Encrypt</div>
+  <div class="stage" data-stage="decrypt">5. Decrypt (Bob)</div>
+</div>
+
+<div class="controls">
+  <button id="btnEntropy">1. Fetch Quantum Entropy</button>
+  <button id="btnSession" disabled>2. Establish Secure Session</button>
+  <button class="reset" id="btnReset">Reset</button>
+</div>
+
+<div id="explainerBox" style="max-width: 900px; margin: 0 auto 20px auto; background: #10182b; border: 1px solid #23304d; border-left: 4px solid #4fd8e8; border-radius: 8px; padding: 16px 20px; font-size: 13px; line-height: 1.6; color: #dbe4ff; display:none;">
+  <strong id="explainerTitle" style="color:#4fd8e8;">What just happened</strong>
+  <p id="explainerText" style="margin: 8px 0 0 0;"></p>
+</div>
+
+<div class="panels">
+  <div class="panel alice">
+    <h2><span class="dot"></span> Alice (sender)</h2>
+    <div class="log" id="logAlice"></div>
+    <div class="msgbox">
+      <input type="text" id="msgInput" placeholder="Type a message to send..." disabled>
+      <button id="btnSend" disabled>Send</button>
+    </div>
+  </div>
+  <div class="panel bob">
+    <h2><span class="dot"></span> Bob (receiver)</h2>
+    <div class="log" id="logBob"></div>
+  </div>
+</div>
+
+<div class="panels" style="margin-top: 20px;">
+  <div class="panel" style="flex: 1;">
+    <h2><span class="dot" style="background:#fbbf24;"></span> Quantum Hardware Signal</h2>
+    <div class="log" id="logHardware"></div>
+  </div>
+</div>
+
+
+
+<script>
+const socket = io();
+const logAlice = document.getElementById('logAlice');
+const logBob = document.getElementById('logBob');
+const logHardware = document.getElementById('logHardware');
+const btnEntropy = document.getElementById('btnEntropy');
+const btnSession = document.getElementById('btnSession');
+const btnSend = document.getElementById('btnSend');
+const msgInput = document.getElementById('msgInput');
+const btnReset = document.getElementById('btnReset');
+const explainerBox = document.getElementById('explainerBox');
+const explainerTitle = document.getElementById('explainerTitle');
+const explainerText = document.getElementById('explainerText');
+
+function showExplainer(title, text) {
+  explainerBox.style.display = 'block';
+  explainerTitle.textContent = title;
+  explainerText.textContent = text;
+  explainerBox.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function setStage(name, cls) {
+  const el = document.querySelector(`.stage[data-stage="${name}"]`);
+  document.querySelectorAll('.stage').forEach(s => s.classList.remove('active'));
+  if (el) el.classList.add(cls);
+}
+
+function line(panel, html) {
+  const div = document.createElement('div');
+  div.className = 'entry';
+  div.innerHTML = html;
+  panel.appendChild(div);
+  panel.scrollTop = panel.scrollHeight;
+}
+
+btnEntropy.onclick = () => {
+  setStage('entropy', 'active');
+  line(logAlice, `<span class="label">&gt; fetching CURBy pulse...</span>`);
+  socket.emit('fetch_entropy');
+};
+
+btnSession.onclick = () => {
+  setStage('kem', 'active');
+  line(logAlice, `<span class="label">&gt; generating ML-KEM-768 ciphertext against Bob's public key...</span>`);
+  socket.emit('establish_session');
+};
+
+btnSend.onclick = () => {
+  const msg = msgInput.value;
+  if (!msg.trim()) return;
+  line(logAlice, `<span class="label">plaintext:</span> <span class="val">${msg}</span>`);
+  socket.emit('send_message', { message: msg });
+  msgInput.value = '';
+};
+
+btnReset.onclick = () => {
+  socket.emit('reset_session');
+};
+
+socket.on('entropy_result', (d) => {
+  setStage('entropy', 'done');
+  showExplainer('Step 1: Quantum Entropy Fetched', d.explain);
+
+  const sourceClass = d.source === 'curby-quantum' ? 'ok' : (d.source === 'curby-classical' ? 'warn' : 'err');
+  line(logAlice, `<span class="label">source:</span> <span class="${sourceClass}">${d.source}</span>`);
+  line(logAlice, `<span class="label">beacon reachable:</span> <span class="val">${d.beacon_reachable}</span>`);
+  if (d.curby_round) {
+    line(logAlice, `<span class="label">CURBy round:</span> <span class="val">${d.curby_round}</span>`);
+    line(logAlice, `<span class="label">round timestamp:</span> <span class="val">${d.curby_timestamp}</span>`);
+    line(logAlice, `<span class="label">data hash:</span> <span class="val">${d.curby_data_hash.slice(0,32)}...</span>`);
+  }
+  line(logAlice, `<span class="label">seed preview:</span> <span class="val">${d.seed_preview}</span>`);
+  line(logAlice, `<span class="label">note:</span> <span class="val">${d.note}</span>`);
+
+  if (d.led_info) {
+    const li = d.led_info;
+    const hwNote = li.led_writable ? '(physically flashing on the Pi board)' : '(not writable this run -- start with sudo to enable)';
+    line(logHardware, `<span class="label">-- physical LED signal --</span>`);
+    line(logHardware, `<span class="label">pattern:</span> <span class="val">${li.blinks} blink${li.blinks > 1 ? 's' : ''}, ~${li.on_ms}ms each</span> <span class="ok">${hwNote}</span>`);
+    if (li.raw_readout && li.raw_readout.length) {
+      line(logHardware, `<span class="label">raw sysfs readback:</span> <span class="val" style="color:#4ade80;">${li.raw_readout.join(' ')}</span>`);
+    }
+    line(logHardware, `<span class="label" style="font-size:10px;">blink count derived from seed byte[0] (mod 5 + 1), timing from byte[1]/byte[2] -- different every fetch because the bytes are different every fetch</span>`);
+  }
+
+  if (d.health_check && !d.health_check.error) {
+    const hc = d.health_check;
+    line(logHardware, `<span class="label">-- TRNG/QRNG health check (n=${hc.n_bytes} bytes) --</span>`);
+    line(logHardware, `<span class="label">bit balance:</span> <span class="val">${hc.bit_balance}</span> <span class="${hc.bit_balance_verdict.startsWith('within') ? 'ok' : 'warn'}">(${hc.bit_balance_verdict})</span>`);
+    line(logHardware, `<span class="label">Shannon entropy:</span> <span class="val">${hc.shannon_entropy_bits_per_byte} bits/byte</span> <span class="${hc.entropy_verdict.startsWith('within') ? 'ok' : 'warn'}">(${hc.entropy_verdict})</span>`);
+    line(logHardware, `<span class="label">serial correlation:</span> <span class="val">${hc.serial_correlation}</span>`);
+    line(logHardware, `<span class="label" style="font-size:10px;">${hc.sample_size_note}</span>`);
+  }
+  btnSession.disabled = false;
+});
+
+socket.on('session_established', (d) => {
+  setStage('kem', 'done');
+  setStage('derive', 'done');
+  showExplainer('Step 2: Secure Session Established (ML-KEM-768)', d.explain);
+
+  line(logAlice, `<span class="label">public key:</span> <span class="val">${d.public_key_bytes} bytes</span>`);
+  line(logAlice, `<span class="label">KEM ciphertext:</span> <span class="val">${d.kem_ciphertext_bytes} bytes</span>`);
+  line(logAlice, `<span class="label">shared secret:</span> <span class="val">${d.shared_secret_bytes} bytes</span>`);
+  line(logAlice, `<span class="label">session key fingerprint:</span> <span class="val">${d.key_fingerprint}</span>`);
+  line(logAlice, `<span class="${d.keys_match ? 'ok' : 'err'}">Alice/Bob keys match: ${d.keys_match}</span>`);
+
+  line(logBob, `<span class="label">&gt; received KEM ciphertext, decapsulating with secret key...</span>`);
+  line(logBob, `<span class="label">session key fingerprint:</span> <span class="val">${d.key_fingerprint}</span>`);
+  line(logBob, `<span class="${d.keys_match ? 'ok' : 'err'}">Keys match Alice: ${d.keys_match}</span>`);
+
+  msgInput.disabled = false;
+  btnSend.disabled = false;
+});
+
+socket.on('message_encrypted', (d) => {
+  setStage('encrypt', 'active');
+  showExplainer('Step 3: Message Encrypted (AES-256-GCM)', d.explain);
+  line(logAlice, `<span class="label">nonce:</span> <span class="val">${d.nonce}</span>`);
+  line(logAlice, `<span class="label">ciphertext:</span> <span class="val">${d.ciphertext.slice(0,48)}...</span>`);
+  line(logBob, `<span class="label">&gt; ciphertext received:</span> <span class="val">${d.ciphertext.slice(0,48)}...</span>`);
+  setStage('decrypt', 'active');
+});
+
+socket.on('message_decrypted', (d) => {
+  setStage('encrypt', 'done');
+  setStage('decrypt', 'done');
+  showExplainer('Step 4: Message Decrypted by Bob', d.explain);
+  line(logBob, `<span class="label">&gt; decrypted with AES-256-GCM:</span>`);
+  line(logBob, `<span class="ok">"${d.message}"</span>`);
+  line(logBob, `<span class="${d.verified ? 'ok' : 'err'}">integrity verified: ${d.verified}</span>`);
+});
+
+socket.on('pipeline_error', (d) => {
+  line(logAlice, `<span class="err">error: ${d.message}</span>`);
+});
+
+socket.on('session_reset', () => {
+  logAlice.innerHTML = '';
+  logBob.innerHTML = '';
+  logHardware.innerHTML = '';
+  explainerBox.style.display = 'none';
+  document.querySelectorAll('.stage').forEach(s => s.classList.remove('active', 'done'));
+  btnSession.disabled = true;
+  btnSend.disabled = true;
+  msgInput.disabled = true;
+  line(logAlice, `<span class="label">&gt; session reset. Fetch entropy to begin again.</span>`);
+});
+</script>
+</body>
+</html>
