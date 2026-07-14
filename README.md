@@ -4,7 +4,7 @@ A messenger where the AES encryption key is derived from real quantum-beacon
 randomness combined with a post-quantum key exchange, built for the Light
 Rider Qualification Contest.
 
-**Demo video:** [link added here -- unlisted YouTube / Drive link]
+**Demo video:
 
 *(Note: the live demo runs on a Raspberry Pi 5 and depends on a physical
 LED and local network access, so it isn't hosted as a permanent public URL.
