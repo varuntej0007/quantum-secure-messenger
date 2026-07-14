@@ -1,30 +1,89 @@
 # Quantum Secure Messenger
 
-A messenger where the AES encryption key is derived from **real quantum-beacon
-randomness** combined with a **post-quantum key exchange** — with every step,
-including when the quantum source itself is unavailable, shown honestly to
-the user instead of faked.
+A messenger where the AES encryption key is derived from real quantum-beacon
+randomness combined with a post-quantum key exchange, built for the Light
+Rider Qualification Contest.
 
-Built for the Light Rider Qualification Contest.
+**Demo video:** [link added here -- unlisted YouTube / Drive link]
+
+*(Note: the live demo runs on a Raspberry Pi 5 and depends on a physical
+LED and local network access, so it isn't hosted as a permanent public URL.
+The video above shows a full, real run of the working system.)*
 
 ---
 
-## What it does
+## What algorithms/technologies this uses, and why each one was chosen
 
-Alice and Bob want to exchange an encrypted message without ever transmitting
-the encryption key itself over the network. This app does that live, using:
+### 1. CURBy quantum entropy beacon (`random.colorado.edu`)
+A public randomness beacon operated by CU Boulder / NIST, built on measuring
+entangled photon pairs at two detectors ~100m apart. The statistical
+correlations in the results can be shown, via Bell's theorem, to not have
+been predetermined by any classical hidden mechanism -- a categorically
+stronger unpredictability guarantee than ordinary hardware noise (a TRNG).
 
-1. **CURBy** (`random.colorado.edu`) — a public quantum randomness beacon run
-   by CU Boulder / NIST, based on measuring entangled photon pairs at two
-   separated detectors.
-2. **ML-KEM-768** — a NIST-standardized post-quantum key encapsulation
-   mechanism, so the key exchange itself stays secure even against a future
-   quantum computer.
-3. **AES-256-GCM** — standard authenticated encryption for the actual message.
+**Why it matters:** every cryptographic key is only as strong as the
+randomness that generated it. A predictable random-number source is a
+security hole regardless of how strong the encryption algorithm around it
+is -- this has caused real historical breaches. Sourcing entropy from a
+physically-certified process closes that gap at the root.
 
-The quantum entropy isn't just displayed — it's mixed into the final AES key
-via HKDF, alongside the ML-KEM shared secret. Even in a hypothetical worst
-case where one input were weak, the other still contributes real security.
+**What we found and how we handled it:** CURBy's live quantum source is
+currently offline for a relocation/upgrade -- we verified this ourselves
+(fetched the same round twice, confirmed the data was identical, unchanged
+since August 2025). Rather than hide this or block the whole app on it, we
+mix the CURBy pulse (real, even if currently stale) with fresh local
+randomness + a timestamp, and disclose which mode is active
+(`curby-quantum` / `curby-classical` / `local-fallback`) everywhere in the
+UI. The architecture needs zero code changes to pick up live quantum
+randomness again once CURBy's upgrade completes.
+
+### 2. Statistical entropy health check (custom, `entropy_analysis.py`)
+Before trusting the fetched bytes, we run three basic sanity checks: bit
+balance, Shannon entropy (bits/byte), and serial correlation between
+consecutive bytes.
+
+**Why it matters:** this is a simplified version of the same category of
+check defined formally in **NIST SP 800-90B**, the real standard for
+validating physical entropy sources before they're trusted for
+cryptographic use. Real validation needs far larger samples (SP 800-90B
+requires roughly 1,000,000+ samples and several different min-entropy
+estimators) -- our check is disclosed as indicative only, not a certified
+result, but demonstrates the right category of thinking.
+
+### 3. ML-KEM-768 (NIST-standardized post-quantum key exchange)
+Classical key exchange (e.g. Diffie-Hellman) relies on math problems that a
+sufficiently powerful quantum computer could solve quickly via Shor's
+algorithm. Data encrypted today with classical-only key exchange could be
+harvested now and decrypted later once such hardware exists
+("harvest now, decrypt later"). ML-KEM is built on different math
+(lattice-based problems) believed hard even for quantum computers, and was
+standardized by NIST in 2024.
+
+**Why it matters here:** this keeps the key exchange itself
+quantum-resistant, independent of whether the entropy source is quantum.
+
+### 4. HKDF-SHA3-256 (key derivation)
+A standardized method (built on HMAC) for combining multiple secret inputs
+of different origin -- here, the ML-KEM shared secret and the CURBy
+entropy -- into a single, properly-sized, uniformly strong key, without
+either input leaking a weakness through to the output.
+
+**Why it matters:** this is what makes the quantum entropy *cryptographically
+load-bearing* rather than just displayed on screen -- it's mathematically
+mixed into the actual session key, so it materially contributes to the
+final security, not just the UI narrative.
+
+### 5. AES-256-GCM (message encryption)
+Industry-standard authenticated symmetric encryption. "Authenticated" means
+it doesn't just hide the message -- it cryptographically detects if the
+ciphertext was tampered with in transit (verified live in the demo).
+
+### 6. Physical LED signal (`pi_led.py`)
+The Pi's onboard LED flashes on every entropy fetch, with blink count and
+timing computed directly from the fetched random bytes -- a small, genuine
+hardware expression of the actual randomness, not a canned animation.
+
+---
 
 ## Architecture
 
@@ -48,37 +107,28 @@ Flask + SocketIO server (app.py)
                  +- AES-256-GCM encrypt/decrypt                  (cryptography)
 ```
 
-## A real engineering decision, not a workaround
 
-CURBy's live quantum photon source is currently offline for a relocation and
-upgrade. We verified this ourselves (not just from documentation) by fetching
-the "latest" pulse twice and diffing the response -- it hadn't changed since
-August 2025. Rather than either pretending the beacon is live, or blocking
-the whole app on it, we designed for this explicitly:
 
-- The CURBy pulse (real, publicly verifiable, even if currently static) is
-  mixed with a fresh local nonce and timestamp via SHA3-256, so every session
-  still gets unique key material.
-- The UI and the physical LED both disclose which mode is active
-  (`curby-quantum` / `curby-classical` / `local-fallback`) rather than hiding it.
-- The architecture requires no code changes to switch back to live quantum
-  randomness the moment CURBy's upgrade finishes.
+## Where this could plug into Light Rider's actual work
 
-## The physical signal
+- **QRNG/TRNG evaluation tooling:** `entropy_analysis.py` is a minimal,
+  extensible starting point for a proper entropy health-check pipeline --
+  could be extended toward real SP 800-90B-style min-entropy estimators.
+- **LiFi:** both LiFi and QRNG fundamentally involve measuring/manipulating
+  photons; a LiFi link could plausibly serve as a physical transport layer
+  for distributing beacon-style randomness between devices, or as another
+  physical entropy source to evaluate with the same tooling.
+- **Error correction / privacy amplification:** the HKDF mixing step here
+  is a toy version of "conditioning" a raw entropy source into
+  higher-quality output -- the same conceptual step (usually more
+  rigorous, e.g. Toeplitz-hashing extractors) sits between a raw QRNG/TRNG
+  and its usable output in a production system.
+- **Cloud platform integration:** the entropy-fetch + health-check +
+  key-derivation pipeline here is stateless and could be exposed as an
+  internal API/service other Light Rider systems call for
+  quantum-enhanced key material, rather than being messenger-specific.
 
-The Raspberry Pi's onboard LED flashes whenever entropy is fetched. The
-number of blinks and their timing are derived directly from the fetched
-random bytes (`byte[0] mod 5 + 1` blinks, timing from `byte[1]`/`byte[2]`) --
-a simple but genuine hardware expression of that session's real randomness,
-running on the same board doing the cryptography.
-
-## Entropy health check
-
-Before using the fetched bytes, we run a lightweight statistical pass --
-bit balance, Shannon entropy (bits/byte), and serial correlation -- the same
-*category* of first-pass sanity check a TRNG/QRNG evaluation engineer runs
-before trusting a source. With only ~64 bytes per pulse this is indicative,
-not a certified NIST SP 800-22 run, and the UI says so explicitly.
+---
 
 ## Running it
 
@@ -86,23 +136,15 @@ not a certified NIST SP 800-22 run, and the UI says so explicitly.
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-
-# the onboard LED requires root to write to /sys/class/leds/ACT/brightness
-sudo venv/bin/python3 app.py
+sudo venv/bin/python3 app.py   # sudo needed for the onboard LED write
 ```
 
-Open `http://192.168.1.2:5000` in a browser. Click through: Fetch Quantum
-Entropy -> Establish Secure Session -> type a message -> Send.
+Open `http://<device-ip>:5000`. Click through: Fetch Quantum Entropy ->
+Establish Secure Session -> type a message -> Send.
 
-## Live demo
+---
 
-**https://payphone-hyperlink-stratus.ngrok-free.dev/**
 
-## Evaluation criteria, addressed directly
 
-| Criteria | How this project addresses it |
-|---|---|
-| Creativity and originality | Honest handling of a beacon outage rather than hiding it; TRNG/QRNG-style health check; physical LED signal derived from real entropy bytes, not animation |
-| Technical implementation | Real ML-KEM-768 + AES-256-GCM + HKDF, end-to-end verified; graceful fallback with no silent failure |
-| Effective use of quantum entropy | Entropy is cryptographically load-bearing (feeds the actual AES key derivation), not just displayed |
-| UX / interface quality | Live two-panel visualization with plain-English step-by-step explanations, so the pipeline is understandable without reading code |
+
+
